@@ -7,8 +7,14 @@ Pitch = 0
 # Import dependencies
 import serial
 from flask import Flask, jsonify, request
+import os
+import socket
 import threading
 from datetime import datetime
+
+# The RPi hosts a WiFi hotspot named "hotspot" (see setup_hotspot.sh), so the
+# control PC never needs a static IP - it just joins the WiFi and uses this.
+HOTSPOT_IP = os.environ.get('HOTSPOT_IP', '192.168.4.1')
 
 # Init pyserial
 serial = serial.Serial('/dev/ttyUSB0')
@@ -667,15 +673,48 @@ def rov_control_thread():
 
 
 
+def local_addresses():
+    """Every address this machine answers on, so we can print the right URL."""
+    found = set()
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None):
+            found.add(info[4][0])
+    except (socket.gaierror, OSError):
+        pass
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        probe.connect((HOTSPOT_IP, 9))
+        found.add(probe.getsockname()[0])
+        probe.close()
+    except OSError:
+        pass
+    return found
+
+
+def print_banner(port):
+    addresses = local_addresses()
+    # Plain ASCII on purpose: a plain "ssh pi@192.168.4.1" session often has no
+    # UTF-8 locale, and box-drawing characters would crash the print.
+    print("+--------------------------------------------------+")
+    print("|          ROVcoPILOT Server Starting...           |")
+    print("+--------------------------------------------------+")
+    print(f"\n  Hotspot IP : {HOTSPOT_IP}")
+    for address in sorted(addresses):
+        print(f"  Also at   : http://{address}:{port}")
+    if HOTSPOT_IP not in addresses:
+        print(f"\n  !! {HOTSPOT_IP} is not an address on this machine.")
+        print("  !! The WiFi hotspot is not running. Start it once with:")
+        print("  !!     sudo ./setup_hotspot.sh")
+    print()
+
+
 # When WebServer Starts
 if __name__ == '__main__':
     thread1 = threading.Thread(target=rov_control_thread, daemon=True)
     thread1.start()
-     
-    print("╔════════════════════════════════════════════════════╗")
-    print("║          ROVcoPILOT Server Starting...             ║")
-    print("║     Open http://IP:5000 in your browser    ║")
-    print("╚════════════════════════════════════════════════════╝\n")
-    
-    # Run Flask app
-    app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)
+
+    port = int(os.environ.get('PORT', 80))
+    print_banner(port)
+
+    # Run Flask app - no debugger, it would expose a console on the network
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
